@@ -790,6 +790,37 @@ zgc_cycle_number zgc_request_fresh(void);
 /* Wait for the given GC cycle to finish. */
 void zgc_wait(zgc_cycle_number cycle);
 
+/* Defined if zgc_reserve_at() exists. Test for this rather than for a version number. */
+#define FILC_HAS_ZGC_RESERVE_AT 1
+
+/* Reserves the address range [address, address + length) and returns a pointer to it, or returns NULL
+   and sets errno. The memory is anonymous, zero, readable and writable. The result is the same kind of
+   object that mmap(NULL, length, ...) returns: it can be passed to mmap with MAP_FIXED to map files
+   over parts of it, and to mprotect, madvise and munmap.
+
+   The range is exactly as requested or this fails; it is never relocated. It also never replaces
+   an existing mapping. This is for data that must be at the same address every time it is mapped,
+   such as a file of pointers: each process that reopens it has to reserve the same range, and the
+   pointers it finds are then ordinary pointers into the object this returns.
+
+   The address and the length have to be multiples of the page size. The runtime keeps its own data
+   for the object in the address space around it, which must also be free: a header in the page just
+   before the address, with mark bits in the first page of the chunk (a multiple of 512 KiB) that the
+   header is in, and the object takes whole chunks, so the range from the start of that chunk to the
+   end of the chunk that has the last byte is claimed. A range at a multiple of the chunk size, which
+   has that room before it, always works. Failures:
+
+   - EINVAL if the address is NULL, the length is 0, the range is not page aligned, wraps around or
+     leaves the address space of the runtime, or the address is in the first or second page of a chunk.
+
+   - EEXIST if any of the range, or the memory the runtime needs around it, is already mapped. This
+     includes an object returned by this function, until it is unmapped and the GC has collected it.
+
+   - ENOMEM if the runtime has no resources to do it.
+
+   Unmapping the object from its start with its whole length frees it like any other mmap object. */
+void* zgc_reserve_at(unsigned long address, __SIZE_TYPE__ length);
+
 /* Request a synchronous scavenge. This decommits all memory that can be decommitted.
    
    If we you want to free all memory that can possibly be freed and you're happy to wait, then you should

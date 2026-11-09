@@ -314,6 +314,20 @@ PAS_API pas_allocation_result verse_heap_allocate(pas_heap* heap, size_t size);
 
 /* This is mean to be called as the fast case of aligned allocation. */
 PAS_API pas_allocation_result verse_heap_try_allocate_with_alignment(pas_heap* heap, size_t size, size_t alignment);
+
+/* Allocates a large object whose allocation starts exactly at begin, or fails without side effects.
+
+   The object occupies all the chunks from the one that has begin to the one that has the last byte of
+   the object. Those chunks are claimed from the OS with MAP_FIXED_NOREPLACE, so the whole span must be
+   free; the first page of the first chunk holds the mark bits, so begin must not be in it. Begin and
+   size must be aligned to VERSE_HEAP_PAGE_SIZE.
+
+   On failure, *error is set to an errno value: EINVAL for a begin and size that this cannot place,
+   EEXIST if the span is in use, ENOMEM otherwise. The memory is fresh anonymous memory, and
+   afterwards it is memory of the heap like any other: when the object dies it goes to the heap's free
+   chunks. */
+PAS_API pas_allocation_result verse_heap_try_allocate_large_exact(
+    pas_heap* heap, uintptr_t begin, size_t size, int* error);
 PAS_API pas_allocation_result verse_heap_allocate_with_alignment(pas_heap* heap, size_t size, size_t alignment);
 
 PAS_END_EXTERN_C;

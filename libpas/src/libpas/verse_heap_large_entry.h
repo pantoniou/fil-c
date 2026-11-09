@@ -41,6 +41,9 @@ struct verse_heap_large_entry {
     uintptr_t begin;
     uintptr_t end;
     pas_heap* heap;
+    /* True for an object that was placed at an exact address. When it dies its chunks are retired for
+       reuse at the same address and not given to the heap. */
+    bool is_exact;
 	verse_heap_mark_bits_page_commit_controller mark_bits_page_commit_controller;
 };
 
