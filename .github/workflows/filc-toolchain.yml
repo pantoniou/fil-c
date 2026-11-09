@@ -1,0 +1,72 @@
+name: Fil-C toolchain
+
+# Builds Fil-C from this branch and publishes the packaged toolchain
+# (package-build.sh) as a release, so that other projects can download it
+# instead of building Fil-C.  Run it by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (for example reserve-at-0.687)"
+        required: true
+        default: "reserve-at-0.687"
+      run_tests:
+        description: "Run filc/run-tests after the build (much slower)"
+        type: boolean
+        default: false
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+    - name: "Free disk space"
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+          /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+        df -h /
+
+    - name: "Checkout"
+      uses: actions/checkout@v5
+
+    - name: "Install dependencies"
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install --no-install-recommends -y \
+          cmake ninja-build ruby patchelf ccache python3 xz-utils \
+          build-essential linux-libc-dev
+
+    - name: "Cache ccache"
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ github.sha }}
+        restore-keys: ccache-
+
+    - name: "Build"
+      run: |
+        export CCACHE_DIR=$HOME/.cache/ccache CCACHE_MAXSIZE=5G
+        ccache -z || true
+        ./build_base.sh
+        ccache -s || true
+
+    - name: "Test"
+      if: ${{ inputs.run_tests }}
+      run: filc/run-tests
+
+    - name: "Package"
+      run: ./package-build.sh
+
+    - name: "Publish"
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ls -l *.tar.xz
+        sha256sum *.tar.xz | tee SHA256SUMS
+        gh release create "${{ inputs.tag }}" --title "Fil-C toolchain ${{ inputs.tag }}" \
+          --notes "Built from ${{ github.sha }}" *.tar.xz SHA256SUMS \
+          || gh release upload "${{ inputs.tag }}" --clobber *.tar.xz SHA256SUMS
