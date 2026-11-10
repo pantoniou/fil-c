@@ -434,6 +434,27 @@ static void finish_allocate_large_in_chunks(
     verse_heap_notify_allocation(object_size);
 }
 
+bool verse_heap_exclude_large_object_from_live_bytes(uintptr_t object_begin)
+{
+    verse_heap_chunk_map_entry_header entry_header;
+    verse_heap_large_entry* entry;
+    bool result = false;
+
+    pas_heap_lock_lock();
+    entry_header = verse_heap_chunk_map_entry_load_header(
+        verse_heap_get_chunk_map_entry_ptr(object_begin));
+    if (verse_heap_chunk_map_entry_header_is_large(entry_header)) {
+        entry = verse_heap_chunk_map_entry_header_large_entry(entry_header);
+        if (object_begin >= entry->begin && object_begin < entry->end && !entry->is_reservation) {
+            entry->is_reservation = true;
+            verse_heap_notify_deallocation(entry->end - entry->begin);
+            result = true;
+        }
+    }
+    pas_heap_lock_unlock();
+    return result;
+}
+
 /* The chunks of dead objects that were placed at an exact address. They are still mapped and the sharing
    pool knows them as free, but they are not in the free heap, so nothing else will ever get them. The
    only user is the allocation of another object at an exact address. That is how the same address is
@@ -1103,7 +1124,8 @@ static bool sweep_large_filter_and_deallocate_callback(verse_heap_large_entry* e
     chunk_begin = pas_round_down_to_power_of_2(entry->begin, VERSE_HEAP_CHUNK_SIZE);
     chunk_end = pas_round_up_to_power_of_2(entry->end, VERSE_HEAP_CHUNK_SIZE);
 
-    did_sweep_bytes(data, entry->end - entry->begin);
+    if (!entry->is_reservation)
+        did_sweep_bytes(data, entry->end - entry->begin);
     
     PAS_ASSERT(chunk_end > chunk_begin);
 

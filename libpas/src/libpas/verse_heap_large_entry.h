@@ -44,6 +44,10 @@ struct verse_heap_large_entry {
     /* True for an object that was placed at an exact address. When it dies its chunks are retired for
        reuse at the same address and not given to the heap. */
     bool is_exact;
+    /* True for an object that is a reservation of address space, such as a mapping: it is not counted as
+       live bytes, so that the size of what is reserved does not set how much garbage the heap can hold
+       before the next collection. */
+    bool is_reservation;
 	verse_heap_mark_bits_page_commit_controller mark_bits_page_commit_controller;
 };
 
