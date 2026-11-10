@@ -444,6 +444,11 @@ static filc_stack_limit compute_stack_limit_for_stack_and_size(char* stack,
     return result;
 }
 
+filc_stack_limit filc_compute_stack_limit_for_stack_and_size(char* stack, size_t stack_size)
+{
+    return compute_stack_limit_for_stack_and_size(stack, stack_size);
+}
+
 filc_stack_limit filc_try_compute_stack_limit(void)
 {
     static const bool verbose = false;
@@ -12138,6 +12143,19 @@ int filc_native_zsys_prctl(filc_thread* my_thread, int option, filc_cc_cursor* a
         return FILC_SYSCALL(my_thread, prctl(option, value, 0, 0, 0));
     }
 
+    /* The capability bounding set and the ambient set take only integers. */
+    case PR_CAPBSET_READ:
+    case PR_CAPBSET_DROP: {
+        unsigned long value = filc_cc_cursor_get_next_unsigned_long(my_thread, args);
+        return FILC_SYSCALL(my_thread, prctl(option, value, 0, 0, 0));
+    }
+
+    case PR_CAP_AMBIENT: {
+        unsigned long operation = filc_cc_cursor_get_next_unsigned_long(my_thread, args);
+        unsigned long capability = filc_cc_cursor_get_next_unsigned_long(my_thread, args);
+        return FILC_SYSCALL(my_thread, prctl(PR_CAP_AMBIENT, operation, capability, 0, 0));
+    }
+
     case PR_SET_PDEATHSIG: {
         unsigned long value = filc_cc_cursor_get_next_unsigned_long(my_thread, args);
         FILC_CHECK(
@@ -12365,6 +12383,11 @@ int filc_native_zsys_landlock_add_rule(filc_thread* my_thread, int fd, int rule_
     switch (rule_type) {
     case LANDLOCK_RULE_PATH_BENEATH:
         filc_check_read(rule_attr_ptr, sizeof(struct landlock_path_beneath_attr));
+        break;
+
+    case LANDLOCK_RULE_NET_PORT:
+        /* Two integers: the access rights and the port. */
+        filc_check_read(rule_attr_ptr, sizeof(struct landlock_net_port_attr));
         break;
 
     default:
@@ -13903,6 +13926,58 @@ int filc_native_zsys_quotactl(filc_thread* my_thread, int cmd, filc_ptr special_
 #endif /* PAS_COSMO -> so end of !PAS_COSMO */
 }
 
+#if !PAS_COSMO
+/* The suspended threads have stopped running the runtime, but the kernel only stops counting them
+   once they have exited. Wait for that, for a little while: a program with threads of its own never
+   gets there, and then the kernel gives the answer. */
+static void wait_for_runtime_threads_to_exit(void)
+{
+    unsigned attempt;
+    for (attempt = 0; attempt < 2000; ++attempt) {
+        DIR* dir = opendir("/proc/self/task");
+        if (!dir)
+            return;
+        unsigned count = 0;
+        struct dirent* entry;
+        while ((entry = readdir(dir))) {
+            if (entry->d_name[0] != '.')
+                count++;
+        }
+        closedir(dir);
+        if (count <= 1)
+            return;
+        struct timespec delay = { 0, 1000000 };
+        nanosleep(&delay, NULL);
+    }
+}
+
+/* The kernel refuses to enter a user namespace from a process with more than one thread (EINVAL),
+   and the runtime has threads of its own: the collector, its parallel workers, and the scavenger.
+   Stop them the way fork does and resume them afterwards. Threads of the program itself are not
+   touched, so a program that has more than one thread still gets EINVAL from the kernel. */
+static int user_namespace_call(filc_thread* my_thread, bool is_setns, int arg0, int arg1)
+{
+    filc_exit(my_thread);
+    sigset_t fullset;
+    sigset_t oldset;
+    pas_reasonably_fill_sigset(&fullset);
+    PAS_ASSERT(!pthread_sigmask(SIG_BLOCK, &fullset, &oldset));
+    pas_scavenger_suspend();
+    fugc_suspend();
+    wait_for_runtime_threads_to_exit();
+    errno = 0;
+    int result = is_setns ? setns(arg0, arg1) : unshare(arg0);
+    int my_errno = errno;
+    fugc_resume();
+    pas_scavenger_resume();
+    PAS_ASSERT(!pthread_sigmask(SIG_SETMASK, &oldset, NULL));
+    filc_enter(my_thread);
+    if (my_errno)
+        filc_set_errno(my_errno);
+    return result;
+}
+#endif /* !PAS_COSMO */
+
 int filc_native_zsys_unshare(filc_thread* my_thread, int flags)
 {
 #if PAS_COSMO
@@ -13910,6 +13985,8 @@ int filc_native_zsys_unshare(filc_thread* my_thread, int flags)
     PAS_UNUSED_PARAM(flags);
     filc_internal_panic(NULL, "unshare not supported.");
 #else /* PAS_COSMO -> so !PAS_COSMO */
+    if (flags & CLONE_NEWUSER)
+        return user_namespace_call(my_thread, false, flags, 0);
     return FILC_SYSCALL(my_thread, unshare(flags));
 #endif /* PAS_COSMO -> so end of !PAS_COSMO */
 }
@@ -14009,6 +14086,9 @@ int filc_native_zsys_setns(filc_thread* my_thread, int fd, int nstype)
     PAS_UNUSED_PARAM(nstype);
     filc_internal_panic(NULL, "setns not supported.");
 #else /* PAS_COSMO -> so !PAS_COSMO */
+    /* A zero nstype lets the descriptor decide, and it may name a user namespace. */
+    if (!nstype || (nstype & CLONE_NEWUSER))
+        return user_namespace_call(my_thread, true, fd, nstype);
     return FILC_SYSCALL(my_thread, setns(fd, nstype));
 #endif /* PAS_COSMO -> so end of !PAS_COSMO */
 }

@@ -634,6 +634,14 @@ long zsys_syscall(long n, ...)
         callee = zsys_syncfs;
         break;
 
+    case SYS_capget:
+        callee = zsys_capget;
+        break;
+
+    case SYS_capset:
+        callee = zsys_capset;
+        break;
+
     case SYS_setreuid:
         callee = zsys_setreuid;
         break;
