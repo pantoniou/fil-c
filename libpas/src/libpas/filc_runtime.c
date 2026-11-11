@@ -14040,8 +14040,8 @@ static void wait_for_runtime_threads_to_exit(void)
     }
 }
 
-/* The kernel refuses to enter a user namespace from a process with more than one thread (EINVAL),
-   and the runtime has threads of its own: the collector, its parallel workers, and the scavenger.
+/* The kernel refuses to enter a user namespace, or join a mount namespace, from a process with
+   more than one thread (EINVAL), and the runtime has threads of its own: the collector, its parallel workers, and the scavenger.
    Stop them the way fork does and resume them afterwards. Threads of the program itself are not
    touched, so a program that has more than one thread still gets EINVAL from the kernel. */
 static int user_namespace_call(filc_thread* my_thread, bool is_setns, int arg0, int arg1)
@@ -14175,8 +14175,10 @@ int filc_native_zsys_setns(filc_thread* my_thread, int fd, int nstype)
     PAS_UNUSED_PARAM(nstype);
     filc_internal_panic(NULL, "setns not supported.");
 #else /* PAS_COSMO -> so !PAS_COSMO */
-    /* A zero nstype lets the descriptor decide, and it may name a user namespace. */
-    if (!nstype || (nstype & CLONE_NEWUSER))
+    /* A zero nstype lets the descriptor decide, and it may name a user namespace. Joining a mount
+       namespace needs a process that shares its filesystem information with no other thread, and
+       the runtime's threads share it. */
+    if (!nstype || (nstype & (CLONE_NEWUSER | CLONE_NEWNS)))
         return user_namespace_call(my_thread, true, fd, nstype);
     return FILC_SYSCALL(my_thread, setns(fd, nstype));
 #endif /* PAS_COSMO -> so end of !PAS_COSMO */
